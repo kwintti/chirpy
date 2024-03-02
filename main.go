@@ -5,19 +5,22 @@ import (
     "log"
     "strconv"
     "github.com/go-chi/chi/v5"
+    "fmt"
 )
 
 func main() {
     apiCfg := &apiConfig{}
     r := chi.NewRouter()
-    //mux := http.NewServeMux()
-    fsHandler := apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir("."))))
-    r.Handle("/app/", fsHandler) 
+    rapi := chi.NewRouter()
+    radm := chi.NewRouter()
+    fsHandler := apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir("."))))
     r.Handle("/app/*", fsHandler) 
     r.Handle("/app", fsHandler) 
-    r.HandleFunc("/healthz", healthHandler)
-    r.HandleFunc("/metrics", apiCfg.checkFileserverHits)
-    r.HandleFunc("/reset", apiCfg.resetHits)
+    rapi.Get("/healthz", healthHandler)
+    radm.Get("/metrics", apiCfg.checkFileserverHits)
+    rapi.HandleFunc("/reset", apiCfg.resetHits)
+    r.Mount("/api", rapi)
+    r.Mount("/admin", radm)
     corsMux := middlewareCors(r)
     server := &http.Server{
         Addr: ":8080",
@@ -34,9 +37,21 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) checkFileserverHits(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+    w.Header().Set("Content-Type", "text/html; charset=utf-8")
     w.WriteHeader(200)
-    w.Write([]byte("Hits: " + strconv.Itoa(cfg.fileserverHits))) 
+    fmt.Fprintf(w, `
+
+<html>
+
+<body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited %d times!</p>
+</body>
+
+</html>
+
+
+    `, cfg.fileserverHits) 
 }
 
 func (cfg *apiConfig) resetHits(w http.ResponseWriter, r *http.Request) {
