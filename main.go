@@ -1,11 +1,13 @@
 package main
 
 import (
-    "net/http"
-    "log"
-    "strconv"
-    "github.com/go-chi/chi/v5"
-    "fmt"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func main() {
@@ -19,6 +21,7 @@ func main() {
     rapi.Get("/healthz", healthHandler)
     radm.Get("/metrics", apiCfg.checkFileserverHits)
     rapi.HandleFunc("/reset", apiCfg.resetHits)
+    rapi.Post("/validate_chirp", validateChirp)
     r.Mount("/api", rapi)
     r.Mount("/admin", radm)
     corsMux := middlewareCors(r)
@@ -27,6 +30,70 @@ func main() {
         Handler: corsMux,
     }
     log.Fatal(server.ListenAndServe())
+    
+}
+
+func validateChirp(w http.ResponseWriter, r *http.Request) {
+    type parameters struct {
+        Body string `json:"body"`
+    }
+    
+    type returnError struct {
+        Error string `json:"error"`
+    }
+    type returnValid struct {
+        Valid bool   `json:"valid"`
+    }
+
+    decoder := json.NewDecoder(r.Body)
+    params := parameters{}
+    err := decoder.Decode(&params)
+    if err != nil {
+        log.Printf("Error decoding paramters %s", err)
+        w.WriteHeader(500)
+        respBody := &returnError{
+            Error: "Something went wrong",
+        }
+        dat, err := json.Marshal(respBody)
+        if err != nil {
+            log.Printf("Error marshalling JSON: %s", err)
+            w.WriteHeader(500)
+            return
+        }
+        w.Write(dat)
+        return
+    }
+    if len(params.Body) >= 140 {
+        log.Printf("Message you sent is too long %d chars. Only 140 char is allowed.", len(params.Body)) 
+        w.WriteHeader(400)
+        respBody := &returnError{
+            Error: "Chirp is too long",
+        }
+        dat, err := json.Marshal(respBody)
+        if err != nil {
+            log.Printf("Error marshalling JSON: %s", err)
+            w.WriteHeader(500)
+            return
+        }
+        w.Write(dat)
+        return
+    }
+    fmt.Println(params)
+ 
+    respBody := &returnValid{
+        Valid: true,
+    }
+
+    dat, err := json.Marshal(respBody) 
+    if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+        return
+	}
+
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(200)
+	w.Write(dat)
     
 }
 
