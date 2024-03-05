@@ -10,11 +10,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
+    "flag"
 	"github.com/go-chi/chi/v5"
 )
 
 func main() {
+    dbg := flag.Bool("debug", false, "Enable debug mode")
+    flag.Parse()
+    if *dbg {
+        err := os.Remove("database.json")
+        if err != nil {
+            log.Print(err)
+        }
+    }
     apiCfg := &apiConfig{}
     r := chi.NewRouter()
     rapi := chi.NewRouter()
@@ -28,6 +36,7 @@ func main() {
     rapi.Post("/chirps", postChirps)
     rapi.Get("/chirps", getChirpsGet)
     rapi.Get("/chirps/{chirpID}", getOneChirp)
+    rapi.Post("/users", addUserPost)
     r.Mount("/api", rapi)
     r.Mount("/admin", radm)
     corsMux := middlewareCors(r)
@@ -44,11 +53,11 @@ type Chirp struct {
     Body string   `json:"body"`
 }
 
+
 func postChirps(w http.ResponseWriter, r *http.Request) {
     type parameters struct {
         Body string `json:"body"`
     }
-    
     type returnError struct {
         Error string `json:"error"`
     }
@@ -110,6 +119,7 @@ type DB struct {
 
 type DBStructure struct {
     Chirps map[int]Chirp `json:"chirps"`
+    Users map[int]User `json:"users"`
 }
 
 func NewDB(path string) (*DB, error) {
@@ -188,6 +198,11 @@ func (db *DB) loadDB() (DBStructure, error) {
         idCount = 0
     } else {
         idCount = len(handlingDB.Chirps)
+    }
+    if len(handlingDB.Users) == 0 {
+        idCount = 0
+    } else {
+        idCount = len(handlingDB.Users)
     }
 
     return handlingDB, nil
@@ -279,6 +294,57 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
             return
         }
         w.Write(dat)
+}
+
+type User struct {
+    Id      int     `json:"id"`
+    Email   string  `json:"email"`
+}
+
+func (db *DB) addNewUser(email string) (User, error) {
+    newUser := User{}
+    db.mux.RLock()
+    defer db.mux.RUnlock()
+    dbStructure, err := db.loadDB()
+    if err != nil {
+        log.Print(err)
+    }
+    idCount++
+    newUser.Id = idCount
+    newUser.Email = email 
+    if len(dbStructure.Users) == 0 {
+        dbStructure.Users = make(map[int]User)
+    }
+    dbStructure.Users[int(newUser.Id)] = newUser
+    err = db.writeDB(dbStructure)
+
+    return newUser, err
+    
+}
+
+func addUserPost(w http.ResponseWriter, r *http.Request) {
+    type parameters struct {
+        Email string `json:"email"`
+    }
+    usr, err := NewDB("database.json")
+    if err != nil {
+        log.Print(err)
+    }
+    decoder := json.NewDecoder(r.Body)
+    params := parameters{}
+    err = decoder.Decode(&params)
+    if err != nil {
+            log.Printf("Error decoding paramters %s", err)
+            msg := "Something went wrong"
+            respondWithError(w, 500, msg)
+            return
+    }
+    newUser, err := usr.addNewUser(params.Email)
+    if err != nil {
+        log.Print(err)
+    }
+    respondWithJSON(w, 201, newUser)
+    
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
