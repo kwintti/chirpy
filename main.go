@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,8 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-    "flag"
+	"time"
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -37,6 +42,8 @@ func main() {
     rapi.Get("/chirps", getChirpsGet)
     rapi.Get("/chirps/{chirpID}", getOneChirp)
     rapi.Post("/users", addUserPost)
+    rapi.Post("/login", userLoginPost)
+    rapi.Put("/users", updateUserPut)
     r.Mount("/api", rapi)
     r.Mount("/admin", radm)
     corsMux := middlewareCors(r)
@@ -299,9 +306,24 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 type User struct {
     Id      int     `json:"id"`
     Email   string  `json:"email"`
+    Password string `json:"password"`
+    Token   string  `json:"token"`
 }
 
-func (db *DB) addNewUser(email string) (User, error) {
+func (u User) PasswordOmited() map[string]interface{} {
+    return map[string]interface{}{
+        "id":       u.Id,
+        "email":    u.Email,
+    }
+}
+
+func (u User) ShowToken() map[string]interface{} {
+    return map[string]interface{}{
+        "token":    u.Token,
+    }
+}
+
+func (db *DB) addNewUser(email, password string, expires int) (User, error) {
     newUser := User{}
     db.mux.RLock()
     defer db.mux.RUnlock()
@@ -310,22 +332,74 @@ func (db *DB) addNewUser(email string) (User, error) {
         log.Print(err)
     }
     idCount++
+    hash, err := generateHashForPassword(password)
+    if err != nil {
+        log.Print(err)
+    } 
     newUser.Id = idCount
     newUser.Email = email 
+    newUser.Password = string(hash)
+    newUser.Token, err = createToken(expires, strconv.Itoa(idCount))
+    if err != nil {
+        return User{}, err
+    }
+    emailDuplicateFound := false
+    for _, val := range dbStructure.Users {
+        if val.Email == email {
+            emailDuplicateFound = true
+        }
+    }
+
+    if !emailDuplicateFound {
+
     if len(dbStructure.Users) == 0 {
         dbStructure.Users = make(map[int]User)
     }
     dbStructure.Users[int(newUser.Id)] = newUser
     err = db.writeDB(dbStructure)
-
     return newUser, err
+}
+    err = errors.New("Email already in use. User not created") 
+
+    return User{}, err
     
 }
 
-func addUserPost(w http.ResponseWriter, r *http.Request) {
-    type parameters struct {
-        Email string `json:"email"`
+func (db *DB) updateUser(email, password string, id int) (User, error) {
+    db.mux.RLock()
+    defer db.mux.RUnlock()
+    hash, err := generateHashForPassword(password)
+    if err != nil {
+        log.Print(err)
+    } 
+    loadedUser := User{
+                    Id: id,
+                    Email: email,
+                    Password: string(hash),
+                    }
+    dbStructure, err := db.loadDB()
+    if err != nil {
+        return User{}, err
     }
+    for _, val := range dbStructure.Users {
+        if val.Id == id {
+            loadedUser.Token = dbStructure.Users[id].Token
+            dbStructure.Users[id] = loadedUser
+            err = db.writeDB(dbStructure)
+            return loadedUser, err
+        }
+    }
+    err = errors.New("user not found")
+    return loadedUser, err
+}
+
+type parameters struct {
+    Email string `json:"email"`
+    Password string `json:"password"`
+    Expires int     `json:"expires_in_seconds,omitempty"`
+}
+
+func addUserPost(w http.ResponseWriter, r *http.Request) {
     usr, err := NewDB("database.json")
     if err != nil {
         log.Print(err)
@@ -339,13 +413,149 @@ func addUserPost(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 500, msg)
             return
     }
-    newUser, err := usr.addNewUser(params.Email)
+    //exp, err := strconv.Atoi(params.Expires)
+    newUser, err := usr.addNewUser(params.Email, params.Password, params.Expires)
+    if err != nil {
+        log.Print(err)
+        respondWithError(w, 403, "User with same email already exists")
+    } else {
+        newUserPasswordless := newUser.PasswordOmited()
+        respondWithJSON(w, 201, newUserPasswordless)
+    }
+    
+}
+
+func userLoginPost(w http.ResponseWriter, r *http.Request) {
+    usr, err := NewDB("database.json")
     if err != nil {
         log.Print(err)
     }
-    respondWithJSON(w, 201, newUser)
+    decoder := json.NewDecoder(r.Body)
+    params := parameters{}
+    err = decoder.Decode(&params)
+    if err != nil {
+            log.Printf("Error decoding paramters %s", err)
+            msg := "Something went wrong"
+            respondWithError(w, 500, msg)
+            return
+    }
+    logingUser, err :=  usr.userLogin(params.Email, params.Password, params.Expires) 
+    if err != nil {
+        log.Print(err)
+        respondWithError(w, 401, "Wrong password")
+    } else {
+        loginUserPasswordless := logingUser.ShowToken()
+        respondWithJSON(w, 200, loginUserPasswordless)
+    }
+    
+
+}
+
+func (db *DB) userLogin(email, password string, expires int) (User, error){
+    loginUser := User{}
+    db.mux.RLock()
+    defer db.mux.RUnlock()
+    dbStructure, err := db.loadDB()
+    if err != nil {
+        log.Print(err)
+    }
+    for _, val := range dbStructure.Users {
+        if email == val.Email {
+            loginUser.Email = val.Email
+            loginUser.Id = val.Id
+            loginUser.Password = val.Password
+            loginUser.Token, err = createToken(expires, strconv.Itoa(val.Id))
+            err := bcrypt.CompareHashAndPassword([]byte(val.Password), []byte(password))
+            if err != nil {
+                return User{}, err
+            }
+            dbStructure.Users[val.Id] = loginUser
+            err = db.writeDB(dbStructure)
+            return loginUser, err
+        }
+    }
+    err = errors.New("User not found")
+    return loginUser, err 
+}
+
+
+func generateHashForPassword(password string) ([]byte, error) {
+    cost := 10
+    hash, err := bcrypt.GenerateFromPassword([]byte(password), cost)
+    if err != nil {
+        return nil, err
+    }
+    return hash, err
+}
+
+type myClaims struct {
+    Issuer string
+    Subject string
+    jwt.RegisteredClaims
+}
+
+func createToken(expires_in_seconds int, user_id string) (string, error) {
+    godotenv.Load()
+    jwtSecret := os.Getenv("JWT_SECRET")
+    if expires_in_seconds == 0 || expires_in_seconds > 86400 {
+        expires_in_seconds = 86400
+    }
+    claims := myClaims{
+            RegisteredClaims: jwt.RegisteredClaims{
+                IssuedAt: jwt.NewNumericDate(time.Now()),
+                ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expires_in_seconds) * time.Second)),
+            },
+            Issuer: "chirpy",
+            Subject: user_id,
+    }
+
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    token_signed, err := token.SignedString([]byte(jwtSecret))
+    if err != nil {
+        return "", err
+    }
+
+    return token_signed, nil
+}
+
+func updateUserPut(w http.ResponseWriter, r *http.Request) {
+    updUsr, err := NewDB("database.json")
+    if err != nil {
+        log.Print(err)
+    }
+
+    godotenv.Load()
+    jwtSecret := os.Getenv("JWT_SECRET") 
+    myClaims := myClaims{}
+    token_with_bear := r.Header.Get("Authorization")
+    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+    _, err = jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (interface{}, error) {
+        return []byte(jwtSecret), nil
+    })
+    if err != nil {
+        respondWithError(w, 401, "invalid token")
+        log.Print(err)
+        return
+    }
+    id := myClaims.Subject 
+    decoder := json.NewDecoder(r.Body)
+    params := parameters{}
+    err = decoder.Decode(&params)
+    if err != nil {
+        log.Print(err)
+    }
+    idInt, err := strconv.Atoi(id)
+    if err != nil {
+        log.Print(err)
+    }
+    updatedUser, err := updUsr.updateUser(params.Email, params.Password, idInt) 
+    updateUserPasswordless := updatedUser.PasswordOmited()
+
+    respondWithJSON(w, 200, updateUserPasswordless)
     
 }
+
+
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "text/plain; charset=utf-8")
