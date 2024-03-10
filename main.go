@@ -42,7 +42,9 @@ func main() {
     rapi.Get("/chirps", getChirpsGet)
     rapi.Get("/chirps/{chirpID}", getOneChirp)
     rapi.Post("/users", addUserPost)
+    rapi.Post("/revoke", revokeToken)
     rapi.Post("/login", userLoginPost)
+    rapi.Post("/refresh", userRefreshPost)
     rapi.Put("/users", updateUserPut)
     r.Mount("/api", rapi)
     r.Mount("/admin", radm)
@@ -127,6 +129,7 @@ type DB struct {
 type DBStructure struct {
     Chirps map[int]Chirp `json:"chirps"`
     Users map[int]User `json:"users"`
+    Tokens map[int]Token `json:"revoked_tokens"`
 }
 
 func NewDB(path string) (*DB, error) {
@@ -210,6 +213,11 @@ func (db *DB) loadDB() (DBStructure, error) {
         idCount = 0
     } else {
         idCount = len(handlingDB.Users)
+    }
+    if len(handlingDB.Tokens) == 0 {
+        idCount = 0
+    } else {
+        idCount = len(handlingDB.Tokens)
     }
 
     return handlingDB, nil
@@ -308,6 +316,12 @@ type User struct {
     Email   string  `json:"email"`
     Password string `json:"password"`
     Token   string  `json:"token"`
+    RefreshToken string `json:"refresh_token"`
+}
+
+type Token struct {
+    Revoked time.Time   `json:"revoked"`
+    Token   string `json:"token"`
 }
 
 func (u User) PasswordOmited() map[string]interface{} {
@@ -319,11 +333,20 @@ func (u User) PasswordOmited() map[string]interface{} {
 
 func (u User) ShowToken() map[string]interface{} {
     return map[string]interface{}{
+        "id":       u.Id,
+        "email":    u.Email,
+        "token":    u.Token,
+        "refresh_token": u.RefreshToken,
+    }
+}
+
+func (u User) OnlyToken() map[string]interface{} {
+    return map[string]interface{}{
         "token":    u.Token,
     }
 }
 
-func (db *DB) addNewUser(email, password string, expires int) (User, error) {
+func (db *DB) addNewUser(email, password string) (User, error) {
     newUser := User{}
     db.mux.RLock()
     defer db.mux.RUnlock()
@@ -339,7 +362,7 @@ func (db *DB) addNewUser(email, password string, expires int) (User, error) {
     newUser.Id = idCount
     newUser.Email = email 
     newUser.Password = string(hash)
-    newUser.Token, err = createToken(expires, strconv.Itoa(idCount))
+    newUser.Token, err = createToken(strconv.Itoa(idCount))
     if err != nil {
         return User{}, err
     }
@@ -384,6 +407,7 @@ func (db *DB) updateUser(email, password string, id int) (User, error) {
     for _, val := range dbStructure.Users {
         if val.Id == id {
             loadedUser.Token = dbStructure.Users[id].Token
+            loadedUser.RefreshToken = val.RefreshToken
             dbStructure.Users[id] = loadedUser
             err = db.writeDB(dbStructure)
             return loadedUser, err
@@ -413,8 +437,7 @@ func addUserPost(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 500, msg)
             return
     }
-    //exp, err := strconv.Atoi(params.Expires)
-    newUser, err := usr.addNewUser(params.Email, params.Password, params.Expires)
+    newUser, err := usr.addNewUser(params.Email, params.Password)
     if err != nil {
         log.Print(err)
         respondWithError(w, 403, "User with same email already exists")
@@ -439,7 +462,7 @@ func userLoginPost(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 500, msg)
             return
     }
-    logingUser, err :=  usr.userLogin(params.Email, params.Password, params.Expires) 
+    logingUser, err :=  usr.userLogin(params.Email, params.Password) 
     if err != nil {
         log.Print(err)
         respondWithError(w, 401, "Wrong password")
@@ -451,7 +474,7 @@ func userLoginPost(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func (db *DB) userLogin(email, password string, expires int) (User, error){
+func (db *DB) userLogin(email, password string) (User, error){
     loginUser := User{}
     db.mux.RLock()
     defer db.mux.RUnlock()
@@ -464,7 +487,8 @@ func (db *DB) userLogin(email, password string, expires int) (User, error){
             loginUser.Email = val.Email
             loginUser.Id = val.Id
             loginUser.Password = val.Password
-            loginUser.Token, err = createToken(expires, strconv.Itoa(val.Id))
+            loginUser.Token, err = createToken(strconv.Itoa(val.Id))
+            loginUser.RefreshToken, err = createRefreshToken(strconv.Itoa(val.Id))
             err := bcrypt.CompareHashAndPassword([]byte(val.Password), []byte(password))
             if err != nil {
                 return User{}, err
@@ -477,6 +501,79 @@ func (db *DB) userLogin(email, password string, expires int) (User, error){
     err = errors.New("User not found")
     return loginUser, err 
 }
+
+func userRefreshPost(w http.ResponseWriter, r *http.Request) {
+    db, err := NewDB("database.json")
+    if err != nil {
+        log.Print(err)
+    }
+    revokedTokens, err := db.loadDB()
+    godotenv.Load()
+    jwtSecret := os.Getenv("JWT_SECRET") 
+    myClaims := myClaims{}
+    user := User{}
+    token_with_bear := r.Header.Get("Authorization")
+    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+    _, err = jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (interface{}, error) {
+        return []byte(jwtSecret), nil
+    })
+    if err != nil {
+        respondWithError(w, 401, "invalid token")
+        log.Print(err)
+        return
+    }
+    if myClaims.Issuer != "chirpy-refresh" {
+        respondWithError(w, 401, "This token is not Refresh token.")
+        return
+    }
+    for _, val := range revokedTokens.Tokens {
+        if val.Token == tokenString {
+            respondWithError(w, 401, "This token is revoked")
+            return
+        }
+    }
+    for _, val := range revokedTokens.Users {
+        if tokenString == val.RefreshToken {
+            user.Token, err = createToken(strconv.Itoa(val.Id))
+            user.Email = val.Email
+            user.Id = val.Id
+            user.Password = val.Password
+            user.RefreshToken = val.RefreshToken
+            if err != nil {
+                log.Print("Couldn't create token")
+                return
+            }
+            revokedTokens.Users[val.Id] = user
+            err = db.writeDB(revokedTokens)
+            respondWithJSON(w, 200, user.OnlyToken())    
+            return
+        }
+    }
+    
+    
+}
+
+func revokeToken(w http.ResponseWriter, r *http.Request) {
+    db, err := NewDB("database.json")
+    if err != nil {
+        log.Print(err)
+    }
+    idCount++
+    revokedTokens, err := db.loadDB()
+    token_with_bear := r.Header.Get("Authorization")
+    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+    tokenToWrite := Token{
+                        Revoked: time.Now(),
+                        Token: tokenString,}
+
+     
+    if len(revokedTokens.Tokens) == 0 {
+        revokedTokens.Tokens = make(map[int]Token)
+    }
+    revokedTokens.Tokens[idCount] = tokenToWrite
+    err = db.writeDB(revokedTokens)
+}
+    
 
 
 func generateHashForPassword(password string) ([]byte, error) {
@@ -494,18 +591,36 @@ type myClaims struct {
     jwt.RegisteredClaims
 }
 
-func createToken(expires_in_seconds int, user_id string) (string, error) {
+func createToken(user_id string) (string, error) {
     godotenv.Load()
     jwtSecret := os.Getenv("JWT_SECRET")
-    if expires_in_seconds == 0 || expires_in_seconds > 86400 {
-        expires_in_seconds = 86400
-    }
+    expires_in_seconds := 3600
     claims := myClaims{
             RegisteredClaims: jwt.RegisteredClaims{
-                IssuedAt: jwt.NewNumericDate(time.Now()),
                 ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expires_in_seconds) * time.Second)),
             },
-            Issuer: "chirpy",
+            Issuer: "chirpy-access",
+            Subject: user_id,
+    }
+
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    token_signed, err := token.SignedString([]byte(jwtSecret))
+    if err != nil {
+        return "", err
+    }
+
+    return token_signed, nil
+}
+
+func createRefreshToken(user_id string) (string, error) {
+    godotenv.Load()
+    jwtSecret := os.Getenv("JWT_SECRET")
+    expires_in_hours := 1440
+    claims := myClaims{
+            RegisteredClaims: jwt.RegisteredClaims{
+                ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expires_in_hours) * time.Hour)),
+            },
+            Issuer: "chirpy-refresh",
             Subject: user_id,
     }
 
@@ -535,6 +650,11 @@ func updateUserPut(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         respondWithError(w, 401, "invalid token")
         log.Print(err)
+        return
+    }
+    if myClaims.Issuer == "chirpy-refresh" {
+        log.Print("Refresh token is used, Access token is needed.")
+        respondWithError(w, 401, "Refresh token is used. Access token is required.")
         return
     }
     id := myClaims.Subject 
