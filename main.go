@@ -41,6 +41,7 @@ func main() {
     rapi.Post("/chirps", postChirps)
     rapi.Get("/chirps", getChirpsGet)
     rapi.Get("/chirps/{chirpID}", getOneChirp)
+    rapi.Delete("/chirps/{chirpID}", deleteChirpDELETE)
     rapi.Post("/users", addUserPost)
     rapi.Post("/revoke", revokeToken)
     rapi.Post("/login", userLoginPost)
@@ -57,11 +58,13 @@ func main() {
     
 }
 
+var idCount int  
+
 type Chirp struct {
     Id          int     `json:"id"`
     Body string   `json:"body"`
+    AuthorId    int `json:"author_id"`
 }
-
 
 func postChirps(w http.ResponseWriter, r *http.Request) {
     type parameters struct {
@@ -73,10 +76,23 @@ func postChirps(w http.ResponseWriter, r *http.Request) {
     type returnValid struct {
         Valid bool   `json:"valid"`
     }
-
+    godotenv.Load()
+    jwtSecret := os.Getenv("JWT_SECRET") 
+    myClaims := myClaims{}
+    token_with_bear := r.Header.Get("Authorization")
+    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+    _, err := jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (interface{}, error) {
+        return []byte(jwtSecret), nil
+    })
+    if err != nil {
+        respondWithError(w, 401, "invalid token")
+        log.Print(err)
+        return
+    }
+    authorId := myClaims.Subject
     decoder := json.NewDecoder(r.Body)
     params := parameters{}
-    err := decoder.Decode(&params)
+    err = decoder.Decode(&params)
     if err != nil {
             log.Printf("Error decoding paramters %s", err)
             msg := "Something went wrong"
@@ -113,7 +129,12 @@ func postChirps(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         log.Print(err) 
     }
-    newChirp, err := db.CreateChirp(cleaned_msg_joined)
+    idInt, err := strconv.Atoi(authorId)
+    if err != nil {
+        log.Print(err)
+    }
+    
+    newChirp, err := db.CreateChirp(cleaned_msg_joined, idInt)
     if err != nil {
         log.Print(err)
     }
@@ -169,9 +190,8 @@ func (db *DB) GetChirps() ([]Chirp, error) {
     return chirpsOut, nil
 }
 
-var idCount int = 0
 
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(body string, authorId int) (Chirp, error) {
     newChirp := Chirp{}
     db.mux.RLock()
     defer db.mux.RUnlock()
@@ -179,9 +199,10 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
     if err != nil {
         log.Print(err)
     }
-    idCount++
-    newChirp.Id = idCount
+    idCountChirps++
+    newChirp.Id = idCountChirps
     newChirp.Body = body 
+    newChirp.AuthorId = authorId
     if len(dbStructure.Chirps) == 0 {
         dbStructure.Chirps = make(map[int]Chirp)
     }
@@ -191,6 +212,9 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
     return newChirp, err
 
 }
+
+var idCountChirps int
+var idCountTokens int
 
 func (db *DB) loadDB() (DBStructure, error) {
     db.mux.RLock()
@@ -205,19 +229,31 @@ func (db *DB) loadDB() (DBStructure, error) {
         log.Print(err)
     }
     if len(handlingDB.Chirps) == 0 {
-        idCount = 0
+        idCountChirps = 0
     } else {
-        idCount = len(handlingDB.Chirps)
+        keys := make([]int, 0, len(handlingDB.Chirps))
+        for k := range handlingDB.Chirps {
+            keys = append(keys, k)
+        }
+        idCountChirps = keys[len(keys)-1]
     }
     if len(handlingDB.Users) == 0 {
         idCount = 0
     } else {
-        idCount = len(handlingDB.Users)
+        keys := make([]int, 0, len(handlingDB.Chirps))
+        for k := range handlingDB.Chirps {
+            keys = append(keys, k)
+        }
+        idCount = keys[len(keys)-1]
     }
     if len(handlingDB.Tokens) == 0 {
-        idCount = 0
+        idCountTokens = 0
     } else {
-        idCount = len(handlingDB.Tokens)
+        keys := make([]int, 0, len(handlingDB.Chirps))
+        for k := range handlingDB.Chirps {
+            keys = append(keys, k)
+        }
+        idCountTokens = keys[len(keys)-1]
     }
 
     return handlingDB, nil
@@ -558,7 +594,7 @@ func revokeToken(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         log.Print(err)
     }
-    idCount++
+    idCountTokens++
     revokedTokens, err := db.loadDB()
     token_with_bear := r.Header.Get("Authorization")
     tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
@@ -570,9 +606,45 @@ func revokeToken(w http.ResponseWriter, r *http.Request) {
     if len(revokedTokens.Tokens) == 0 {
         revokedTokens.Tokens = make(map[int]Token)
     }
-    revokedTokens.Tokens[idCount] = tokenToWrite
+    revokedTokens.Tokens[idCountTokens] = tokenToWrite
+
     err = db.writeDB(revokedTokens)
 }
+
+func deleteChirpDELETE(w http.ResponseWriter, r *http.Request) {
+    db, err := NewDB("database.json")
+    if err != nil {
+        log.Print(err)
+    }
+    deleteChirp, err := db.loadDB()
+    token_with_bear := r.Header.Get("Authorization")
+    chirpId := chi.URLParam(r, "chirpID")
+    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+    godotenv.Load()
+    jwtSecret := os.Getenv("JWT_SECRET") 
+    userClaims := myClaims{}
+    _, err = jwt.ParseWithClaims(tokenString, &userClaims, func(t *jwt.Token) (interface{}, error) {
+            return []byte(jwtSecret), nil 
+        })
+    if err != nil {
+        respondWithError(w, 401, "invalid token")
+        log.Print(err)
+        return
+    }
+
+    idInt, err := strconv.Atoi(userClaims.Subject)
+    chirpIdInt, err := strconv.Atoi(chirpId)
+    for _, val := range deleteChirp.Chirps {
+        if val.Id == chirpIdInt {
+            if val.AuthorId == idInt{
+                delete(deleteChirp.Chirps, val.Id)
+                err = db.writeDB(deleteChirp)
+                return
+            }
+        }
+    }
+    respondWithError(w, 403, "Something went wrong")
+} 
     
 
 
