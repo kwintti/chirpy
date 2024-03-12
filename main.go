@@ -46,6 +46,7 @@ func main() {
     rapi.Post("/revoke", revokeToken)
     rapi.Post("/login", userLoginPost)
     rapi.Post("/refresh", userRefreshPost)
+    rapi.Post("/polka/webhooks", checkIfChirpyRed)
     rapi.Put("/users", updateUserPut)
     r.Mount("/api", rapi)
     r.Mount("/admin", radm)
@@ -58,7 +59,6 @@ func main() {
     
 }
 
-var idCount int  
 
 type Chirp struct {
     Id          int     `json:"id"`
@@ -170,7 +170,7 @@ func NewDB(path string) (*DB, error) {
     return &newDB, nil
 }
 
-func (db *DB) GetChirps() ([]Chirp, error) {
+func (db *DB) GetChirps(authorID, sortIt string) ([]Chirp, error) {
     db.mux.RLock()
     defer db.mux.RUnlock()
     handlingDB := DBStructure{} 
@@ -182,10 +182,27 @@ func (db *DB) GetChirps() ([]Chirp, error) {
         return nil, err
     }
     chirpsOut := make([]Chirp, 0)
+    if len(authorID) != 0 {
+        authorIDInt, err := strconv.Atoi(authorID)
+        for _, val := range handlingDB.Chirps {
+            if val.AuthorId == authorIDInt {
+                chirpsOut = append(chirpsOut, val)
+            }
+        if err != nil {
+            return nil, err
+        }
+      }
+    } else {
     for _, val := range handlingDB.Chirps {
         chirpsOut = append(chirpsOut, val)
     }
-    sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id < chirpsOut[j].Id})
+}
+    if sortIt == "asc" {
+        sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id < chirpsOut[j].Id})
+    } else {
+        sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id > chirpsOut[j].Id})
+    }
+
 
     return chirpsOut, nil
 }
@@ -212,7 +229,7 @@ func (db *DB) CreateChirp(body string, authorId int) (Chirp, error) {
     return newChirp, err
 
 }
-
+var idCount int  
 var idCountChirps int
 var idCountTokens int
 
@@ -235,36 +252,97 @@ func (db *DB) loadDB() (DBStructure, error) {
         for k := range handlingDB.Chirps {
             keys = append(keys, k)
         }
+        sort.Ints(keys)
         idCountChirps = keys[len(keys)-1]
     }
     if len(handlingDB.Users) == 0 {
         idCount = 0
     } else {
-        keys := make([]int, 0, len(handlingDB.Chirps))
-        for k := range handlingDB.Chirps {
+        keys := make([]int, 0, len(handlingDB.Users))
+        for k := range handlingDB.Users {
             keys = append(keys, k)
         }
+        sort.Ints(keys)
         idCount = keys[len(keys)-1]
     }
     if len(handlingDB.Tokens) == 0 {
         idCountTokens = 0
     } else {
-        keys := make([]int, 0, len(handlingDB.Chirps))
-        for k := range handlingDB.Chirps {
+        keys := make([]int, 0, len(handlingDB.Tokens))
+        for k := range handlingDB.Tokens {
             keys = append(keys, k)
         }
+        sort.Ints(keys)
         idCountTokens = keys[len(keys)-1]
     }
 
     return handlingDB, nil
 }
-    
 
+type Polka struct {
+    Event   string  `json:"event"`
+    Data    data  `json:"data"`
+}
+
+type data struct {
+    UserId   int    `json:"user_id"`
+}
+    
+func checkIfChirpyRed(w http.ResponseWriter, r *http.Request) {
+    godotenv.Load()
+    jwtPolka := os.Getenv("POLKA_SECRET") 
+    db, err := NewDB("database.json")
+    params := Polka{}
+    tokenUnParsed := r.Header.Get("Authorization")
+    token := strings.TrimPrefix(tokenUnParsed, "ApiKey ")
+    if token != jwtPolka {
+        respondWithError(w, 401, "invalid token")
+        return
+    }
+    decoder := json.NewDecoder(r.Body)
+    err = decoder.Decode(&params)
+    if err != nil {
+        respondWithError(w, 403, "Couldn't decode json")
+        return
+    }
+    if params.Event != "user.upgraded" {
+        w.WriteHeader(200)
+        return
+    }
+    err = db.addChirpyRed(params.Data.UserId)
+    if err != nil {
+        w.WriteHeader(404)
+    }
+
+}
+
+func (db *DB) addChirpyRed(id int) error {
+    db.mux.RLock()
+    defer db.mux.RUnlock()
+    dbLoaded, err := db.loadDB()
+    if err != nil {
+        log.Println("Database couldn't be loaded: ", err)
+    }
+    user := User{}
+    for _, val := range dbLoaded.Users {
+        if val.Id == id {
+            user = dbLoaded.Users[id]
+            user.IsChirpyRed = true
+            dbLoaded.Users[id] = user
+            err = db.writeDB(dbLoaded)
+            return err
+        }
+            
+    }
+    err = errors.New("User not found")
+
+    return err
+}
+    
 
 func (db *DB) writeDB(dbStructure DBStructure) error {
     db.mux.RLock()
     defer db.mux.RUnlock()
-     
     dat, err := json.Marshal(dbStructure)
     if err != nil {
             log.Printf("Error marshalling JSON: %s", err)
@@ -283,9 +361,22 @@ func getChirpsGet(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         log.Print(err) 
     }
-    chirps, err := db.GetChirps() 
-    if err != nil {
-        log.Print(err)
+    var chirps []Chirp 
+    authorId := r.URL.Query().Get("author_id")
+    sort := r.URL.Query().Get("sort")
+    if len(sort) == 0 {
+        sort = "asc"
+    }
+    if len(authorId) != 0 {
+        chirps, err = db.GetChirps(authorId, sort) 
+        if err != nil {
+            log.Print(err)
+        }
+    } else {    
+        chirps, err = db.GetChirps("", sort) 
+        if err != nil {
+            log.Print(err)
+        }
     }
     respondWithJSON(w, 200, chirps)
 
@@ -353,6 +444,7 @@ type User struct {
     Password string `json:"password"`
     Token   string  `json:"token"`
     RefreshToken string `json:"refresh_token"`
+    IsChirpyRed bool `json:"is_chirpy_red"`
 }
 
 type Token struct {
@@ -364,6 +456,8 @@ func (u User) PasswordOmited() map[string]interface{} {
     return map[string]interface{}{
         "id":       u.Id,
         "email":    u.Email,
+        "token":    u.Token,
+        "refresh_token": u.RefreshToken,
     }
 }
 
@@ -379,6 +473,14 @@ func (u User) ShowToken() map[string]interface{} {
 func (u User) OnlyToken() map[string]interface{} {
     return map[string]interface{}{
         "token":    u.Token,
+    }
+}
+
+func (u User) MaskLogin() map[string]interface{} {
+    return map[string]interface{}{
+        "id":       u.Id,
+        "email":    u.Email,
+        "is_chirpy_red": u.IsChirpyRed,
     }
 }
 
@@ -398,6 +500,7 @@ func (db *DB) addNewUser(email, password string) (User, error) {
     newUser.Id = idCount
     newUser.Email = email 
     newUser.Password = string(hash)
+    newUser.IsChirpyRed = false
     newUser.Token, err = createToken(strconv.Itoa(idCount))
     if err != nil {
         return User{}, err
@@ -444,6 +547,7 @@ func (db *DB) updateUser(email, password string, id int) (User, error) {
         if val.Id == id {
             loadedUser.Token = dbStructure.Users[id].Token
             loadedUser.RefreshToken = val.RefreshToken
+            loadedUser.IsChirpyRed = val.IsChirpyRed
             dbStructure.Users[id] = loadedUser
             err = db.writeDB(dbStructure)
             return loadedUser, err
@@ -503,7 +607,7 @@ func userLoginPost(w http.ResponseWriter, r *http.Request) {
         log.Print(err)
         respondWithError(w, 401, "Wrong password")
     } else {
-        loginUserPasswordless := logingUser.ShowToken()
+        loginUserPasswordless := logingUser.PasswordOmited()
         respondWithJSON(w, 200, loginUserPasswordless)
     }
     
@@ -520,9 +624,7 @@ func (db *DB) userLogin(email, password string) (User, error){
     }
     for _, val := range dbStructure.Users {
         if email == val.Email {
-            loginUser.Email = val.Email
-            loginUser.Id = val.Id
-            loginUser.Password = val.Password
+            loginUser = val
             loginUser.Token, err = createToken(strconv.Itoa(val.Id))
             loginUser.RefreshToken, err = createRefreshToken(strconv.Itoa(val.Id))
             err := bcrypt.CompareHashAndPassword([]byte(val.Password), []byte(password))
