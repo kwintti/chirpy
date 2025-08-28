@@ -62,8 +62,8 @@ func main() {
 
 type Chirp struct {
     Id          int     `json:"id"`
-    Body string   `json:"body"`
-    AuthorId    int `json:"author_id"`
+    Body        string  `json:"body"`
+    AuthorId    int     `json:"author_id"`
 }
 
 func postChirps(w http.ResponseWriter, r *http.Request) {
