@@ -18,8 +18,14 @@ import (
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
+// import _ "github.com/lib/pq"
 
 func main() {
+	// dbURL := os.Getenv("DB_URL")
+	// db, err := sql.Open("postgres", dbURL)
+	// if err != nil {
+	// 	log.Print(err)
+	// }
     dbg := flag.Bool("debug", false, "Enable debug mode")
     flag.Parse()
     if *dbg {
