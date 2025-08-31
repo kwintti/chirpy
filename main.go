@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,19 +14,23 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
+	"github.com/kwintti/chirpy/internal/database"
 	"golang.org/x/crypto/bcrypt"
+
+	_ "github.com/lib/pq"
 )
-// import _ "github.com/lib/pq"
 
 func main() {
-	// dbURL := os.Getenv("DB_URL")
-	// db, err := sql.Open("postgres", dbURL)
-	// if err != nil {
-	// 	log.Print(err)
-	// }
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Print(err)
+	}
+	dbQueries := database.New(db)
     dbg := flag.Bool("debug", false, "Enable debug mode")
     flag.Parse()
     if *dbg {
@@ -35,6 +40,7 @@ func main() {
         }
     }
     apiCfg := &apiConfig{}
+	apiCfg.dbQueries = dbQueries
     r := chi.NewRouter()
     rapi := chi.NewRouter()
     radm := chi.NewRouter()
@@ -910,4 +916,5 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 
 type apiConfig struct {
 	fileserverHits int
+	dbQueries *database.Queries
 }
