@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/kwintti/chirpy/internal/database"
 	"golang.org/x/crypto/bcrypt"
@@ -41,31 +41,13 @@ func main() {
     }
     apiCfg := &apiConfig{}
 	apiCfg.dbQueries = dbQueries
-    r := chi.NewRouter()
-    rapi := chi.NewRouter()
-    radm := chi.NewRouter()
-    fsHandler := apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir("."))))
-    r.Handle("/app/*", fsHandler) 
-    r.Handle("/app", fsHandler) 
-    rapi.Get("/healthz", healthHandler)
-    radm.Get("/metrics", apiCfg.checkFileserverHits)
-    rapi.HandleFunc("/reset", apiCfg.resetHits)
-    rapi.Post("/chirps", postChirps)
-    rapi.Get("/chirps", getChirpsGet)
-    rapi.Get("/chirps/{chirpID}", getOneChirp)
-    rapi.Delete("/chirps/{chirpID}", deleteChirpDELETE)
-    rapi.Post("/users", addUserPost)
-    rapi.Post("/revoke", revokeToken)
-    rapi.Post("/login", userLoginPost)
-    rapi.Post("/refresh", userRefreshPost)
-    rapi.Post("/polka/webhooks", checkIfChirpyRed)
-    rapi.Put("/users", updateUserPut)
-    r.Mount("/api", rapi)
-    r.Mount("/admin", radm)
-    corsMux := middlewareCors(r)
+
+    ServeMux := http.NewServeMux()
+	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
+
     server := &http.Server{
         Addr: ":8080",
-        Handler: corsMux,
+        Handler: ServeMux,
     }
     log.Fatal(server.ListenAndServe())
     
@@ -93,7 +75,7 @@ func postChirps(w http.ResponseWriter, r *http.Request) {
     myClaims := myClaims{}
     token_with_bear := r.Header.Get("Authorization")
     tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
-    _, err := jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (interface{}, error) {
+    _, err := jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (any, error) {
         return []byte(jwtSecret), nil
     })
     if err != nil {
@@ -331,24 +313,8 @@ func checkIfChirpyRed(w http.ResponseWriter, r *http.Request) {
 func (db *DB) addChirpyRed(id int) error {
     db.mux.RLock()
     defer db.mux.RUnlock()
-    dbLoaded, err := db.loadDB()
-    if err != nil {
-        log.Println("Database couldn't be loaded: ", err)
-    }
-    user := User{}
-    for _, val := range dbLoaded.Users {
-        if val.Id == id {
-            user = dbLoaded.Users[id]
-            user.IsChirpyRed = true
-            dbLoaded.Users[id] = user
-            err = db.writeDB(dbLoaded)
-            return err
-        }
-            
-    }
-    err = errors.New("User not found")
 
-    return err
+    return nil 
 }
     
 
@@ -395,29 +361,8 @@ func getChirpsGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func getOneChirp(w http.ResponseWriter, r *http.Request) {
-    db, err := NewDB("database.json")
-    param := chi.URLParam(r, "chirpID")
 
-    if err != nil {
-        log.Print(err) 
-    }
-    dbLoaded, err := db.loadDB() 
-    if err != nil {
-        log.Print(err)
-    }
-    toInt, err := strconv.Atoi(param)
-    if err != nil {
-        log.Print(err)
-    }
-    chirp, ok := dbLoaded.Chirps[toInt]
-    if !ok {
-        log.Printf("Chirp with id %d not found", toInt)
-        msg := "Chirp with id " + param + " not found"
-        respondWithError(w, 404, msg)
-    } else { 
-    respondWithJSON(w, 200, chirp)
-    }
-
+    respondWithJSON(w, 200, Chirp{})
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -451,12 +396,8 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 }
 
 type User struct {
-    Id      int     `json:"id"`
+    Id      uuid.UUID     `json:"id"`
     Email   string  `json:"email"`
-    Password string `json:"password"`
-    Token   string  `json:"token"`
-    RefreshToken string `json:"refresh_token"`
-    IsChirpyRed bool `json:"is_chirpy_red"`
 }
 
 type Token struct {
@@ -468,8 +409,6 @@ func (u User) PasswordOmited() map[string]interface{} {
     return map[string]interface{}{
         "id":       u.Id,
         "email":    u.Email,
-        "token":    u.Token,
-        "refresh_token": u.RefreshToken,
     }
 }
 
@@ -477,14 +416,11 @@ func (u User) ShowToken() map[string]interface{} {
     return map[string]interface{}{
         "id":       u.Id,
         "email":    u.Email,
-        "token":    u.Token,
-        "refresh_token": u.RefreshToken,
     }
 }
 
 func (u User) OnlyToken() map[string]interface{} {
     return map[string]interface{}{
-        "token":    u.Token,
     }
 }
 
@@ -492,7 +428,6 @@ func (u User) MaskLogin() map[string]interface{} {
     return map[string]interface{}{
         "id":       u.Id,
         "email":    u.Email,
-        "is_chirpy_red": u.IsChirpyRed,
     }
 }
 
@@ -505,18 +440,7 @@ func (db *DB) addNewUser(email, password string) (User, error) {
         log.Print(err)
     }
     idCount++
-    hash, err := generateHashForPassword(password)
-    if err != nil {
-        log.Print(err)
-    } 
-    newUser.Id = idCount
     newUser.Email = email 
-    newUser.Password = string(hash)
-    newUser.IsChirpyRed = false
-    newUser.Token, err = createToken(strconv.Itoa(idCount))
-    if err != nil {
-        return User{}, err
-    }
     emailDuplicateFound := false
     for _, val := range dbStructure.Users {
         if val.Email == email {
@@ -529,7 +453,6 @@ func (db *DB) addNewUser(email, password string) (User, error) {
     if len(dbStructure.Users) == 0 {
         dbStructure.Users = make(map[int]User)
     }
-    dbStructure.Users[int(newUser.Id)] = newUser
     err = db.writeDB(dbStructure)
     return newUser, err
 }
@@ -542,31 +465,10 @@ func (db *DB) addNewUser(email, password string) (User, error) {
 func (db *DB) updateUser(email, password string, id int) (User, error) {
     db.mux.RLock()
     defer db.mux.RUnlock()
-    hash, err := generateHashForPassword(password)
-    if err != nil {
-        log.Print(err)
-    } 
     loadedUser := User{
-                    Id: id,
                     Email: email,
-                    Password: string(hash),
                     }
-    dbStructure, err := db.loadDB()
-    if err != nil {
-        return User{}, err
-    }
-    for _, val := range dbStructure.Users {
-        if val.Id == id {
-            loadedUser.Token = dbStructure.Users[id].Token
-            loadedUser.RefreshToken = val.RefreshToken
-            loadedUser.IsChirpyRed = val.IsChirpyRed
-            dbStructure.Users[id] = loadedUser
-            err = db.writeDB(dbStructure)
-            return loadedUser, err
-        }
-    }
-    err = errors.New("user not found")
-    return loadedUser, err
+    return loadedUser, nil 
 }
 
 type parameters struct {
@@ -637,13 +539,6 @@ func (db *DB) userLogin(email, password string) (User, error){
     for _, val := range dbStructure.Users {
         if email == val.Email {
             loginUser = val
-            loginUser.Token, err = createToken(strconv.Itoa(val.Id))
-            loginUser.RefreshToken, err = createRefreshToken(strconv.Itoa(val.Id))
-            err := bcrypt.CompareHashAndPassword([]byte(val.Password), []byte(password))
-            if err != nil {
-                return User{}, err
-            }
-            dbStructure.Users[val.Id] = loginUser
             err = db.writeDB(dbStructure)
             return loginUser, err
         }
@@ -661,7 +556,6 @@ func userRefreshPost(w http.ResponseWriter, r *http.Request) {
     godotenv.Load()
     jwtSecret := os.Getenv("JWT_SECRET") 
     myClaims := myClaims{}
-    user := User{}
     token_with_bear := r.Header.Get("Authorization")
     tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
     _, err = jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (interface{}, error) {
@@ -679,23 +573,6 @@ func userRefreshPost(w http.ResponseWriter, r *http.Request) {
     for _, val := range revokedTokens.Tokens {
         if val.Token == tokenString {
             respondWithError(w, 401, "This token is revoked")
-            return
-        }
-    }
-    for _, val := range revokedTokens.Users {
-        if tokenString == val.RefreshToken {
-            user.Token, err = createToken(strconv.Itoa(val.Id))
-            user.Email = val.Email
-            user.Id = val.Id
-            user.Password = val.Password
-            user.RefreshToken = val.RefreshToken
-            if err != nil {
-                log.Print("Couldn't create token")
-                return
-            }
-            revokedTokens.Users[val.Id] = user
-            err = db.writeDB(revokedTokens)
-            respondWithJSON(w, 200, user.OnlyToken())    
             return
         }
     }
@@ -726,38 +603,37 @@ func revokeToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteChirpDELETE(w http.ResponseWriter, r *http.Request) {
-    db, err := NewDB("database.json")
-    if err != nil {
-        log.Print(err)
-    }
-    deleteChirp, err := db.loadDB()
-    token_with_bear := r.Header.Get("Authorization")
-    chirpId := chi.URLParam(r, "chirpID")
-    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
-    godotenv.Load()
-    jwtSecret := os.Getenv("JWT_SECRET") 
-    userClaims := myClaims{}
-    _, err = jwt.ParseWithClaims(tokenString, &userClaims, func(t *jwt.Token) (interface{}, error) {
-            return []byte(jwtSecret), nil 
-        })
-    if err != nil {
-        respondWithError(w, 401, "invalid token")
-        log.Print(err)
-        return
-    }
-
-    idInt, err := strconv.Atoi(userClaims.Subject)
-    chirpIdInt, err := strconv.Atoi(chirpId)
-    for _, val := range deleteChirp.Chirps {
-        if val.Id == chirpIdInt {
-            if val.AuthorId == idInt{
-                delete(deleteChirp.Chirps, val.Id)
-                err = db.writeDB(deleteChirp)
-                return
-            }
-        }
-    }
-    respondWithError(w, 403, "Something went wrong")
+    // db, err := NewDB("database.json")
+    // if err != nil {
+    //     log.Print(err)
+    // }
+    // deleteChirp, err := db.loadDB()
+    // token_with_bear := r.Header.Get("Authorization")
+    // tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+    // godotenv.Load()
+    // jwtSecret := os.Getenv("JWT_SECRET") 
+    // userClaims := myClaims{}
+    // _, err = jwt.ParseWithClaims(tokenString, &userClaims, func(t *jwt.Token) (interface{}, error) {
+    //         return []byte(jwtSecret), nil 
+    //     })
+    // if err != nil {
+    //     respondWithError(w, 401, "invalid token")
+    //     log.Print(err)
+    //     return
+    // }
+    //
+    // idInt, err := strconv.Atoi(userClaims.Subject)
+    // chirpIdInt, err := strconv.Atoi(chirpId)
+    // for _, val := range deleteChirp.Chirps {
+    //     if val.Id == chirpIdInt {
+    //         if val.AuthorId == idInt{
+    //             delete(deleteChirp.Chirps, val.Id)
+    //             err = db.writeDB(deleteChirp)
+    //             return
+    //         }
+    //     }
+    // }
+    // respondWithError(w, 403, "Something went wrong")
 } 
     
 
