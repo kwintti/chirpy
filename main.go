@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -44,6 +45,7 @@ func main() {
 
     ServeMux := http.NewServeMux()
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
+	ServeMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("."))))
 
     server := &http.Server{
         Addr: ":8080",
@@ -760,14 +762,14 @@ func (cfg *apiConfig) checkFileserverHits(w http.ResponseWriter, r *http.Request
 </html>
 
 
-    `, cfg.fileserverHits) 
+    `, cfg.fileserverHits.Load()) 
 }
 
 func (cfg *apiConfig) resetHits(w http.ResponseWriter, r *http.Request) {
-    cfg.fileserverHits = 0
+    cfg.fileserverHits.Store(0)
     w.Header().Set("Content-Type", "text/plain; charset=utf-8")
     w.WriteHeader(200)
-    w.Write([]byte("Hits reseted back to: " + strconv.Itoa(cfg.fileserverHits))) 
+    w.Write([]byte("Hits reseted back to: " + strconv.Itoa(int(cfg.fileserverHits.Load())))) 
 }
     
 
@@ -785,12 +787,12 @@ func middlewareCors(next http.Handler) http.Handler {
 }
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
     return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
-        cfg.fileserverHits++
+        cfg.fileserverHits.Add(1)
         next.ServeHTTP(w, r)
     })
 }
 
 type apiConfig struct {
-	fileserverHits int
+	fileserverHits atomic.Int32 
 	dbQueries *database.Queries
 }
