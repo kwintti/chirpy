@@ -45,7 +45,9 @@ func main() {
 
     ServeMux := http.NewServeMux()
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
-	ServeMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("."))))
+	ServeMux.Handle("GET /app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
+	ServeMux.HandleFunc("GET /metrics", apiCfg.checkFileserverHits)
+	ServeMux.HandleFunc("POST /reset", apiCfg.resetHits)
 
     server := &http.Server{
         Addr: ":8080",
