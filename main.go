@@ -46,8 +46,9 @@ func main() {
     ServeMux := http.NewServeMux()
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
 	ServeMux.Handle("GET /app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
-	ServeMux.HandleFunc("GET /metrics", apiCfg.checkFileserverHits)
-	ServeMux.HandleFunc("POST /reset", apiCfg.resetHits)
+	ServeMux.HandleFunc("GET /admin/metrics", apiCfg.checkFileserverHits)
+	ServeMux.HandleFunc("POST /admin/reset", apiCfg.resetHits)
+	ServeMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 
     server := &http.Server{
         Addr: ":8080",
@@ -55,6 +56,49 @@ func main() {
     }
     log.Fatal(server.ListenAndServe())
     
+}
+
+func validateChirp(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	params := Chirp{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	type returnVals struct {
+		Error string `json:"error,omitempty"`
+		Valid bool `json:"valid,omitempty"`
+	}
+	if len(params.Body) > 140 {
+		respValid := returnVals {
+			Error: "Chirp is too long",
+		}
+		dat, err := json.Marshal(respValid)
+		if err != nil {
+			log.Printf("Error Marshling JSON: % s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+
+	}
+	respValid := returnVals {
+		Valid: true,
+	}
+	dat, err := json.Marshal(respValid)
+	if err != nil {
+		log.Printf("Error Marshling JSON: % s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(dat)
 }
 
 
