@@ -49,6 +49,7 @@ func main() {
 	ServeMux.HandleFunc("GET /admin/metrics", apiCfg.checkFileserverHits)
 	ServeMux.HandleFunc("POST /admin/reset", apiCfg.resetHits)
 	ServeMux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	ServeMux.HandleFunc("POST /api/users", validateChirp)
 
     server := &http.Server{
         Addr: ":8080",
@@ -445,6 +446,8 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 
 type User struct {
     Id      uuid.UUID     `json:"id"`
+	CreatedAt time.Time	  `json:"created_at"`
+	UpdatedAt time.Time	  `json:"updated_at"`
     Email   string  `json:"email"`
 }
 
@@ -479,15 +482,13 @@ func (u User) MaskLogin() map[string]interface{} {
     }
 }
 
-func (db *DB) addNewUser(email, password string) (User, error) {
+func (db *DB) addNewUser(email string) (User, error) {
+	user, err := cfg.db.CreateUser(r.Context(), params.Email)
     newUser := User{}
-    db.mux.RLock()
-    defer db.mux.RUnlock()
     dbStructure, err := db.loadDB()
     if err != nil {
         log.Print(err)
     }
-    idCount++
     newUser.Email = email 
     emailDuplicateFound := false
     for _, val := range dbStructure.Users {
