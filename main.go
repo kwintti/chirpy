@@ -482,14 +482,10 @@ func (u User) MaskLogin() map[string]interface{} {
     }
 }
 
-func (db *DB) addNewUser(email string) (User, error) {
+func (cfg *apiConfig) addNewUser(email string) (User, error) {
 	user, err := cfg.db.CreateUser(r.Context(), params.Email)
     newUser := User{}
-    dbStructure, err := db.loadDB()
-    if err != nil {
-        log.Print(err)
-    }
-    newUser.Email = email 
+	newUser.Email := email 
     emailDuplicateFound := false
     for _, val := range dbStructure.Users {
         if val.Email == email {
@@ -841,5 +837,5 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 
 type apiConfig struct {
 	fileserverHits atomic.Int32 
-	dbQueries *database.Queries
+	db *database.Queries
 }
