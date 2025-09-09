@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -41,7 +42,7 @@ func main() {
         }
     }
     apiCfg := &apiConfig{}
-	apiCfg.dbQueries = dbQueries
+	apiCfg.db = dbQueries
 
     ServeMux := http.NewServeMux()
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
@@ -483,27 +484,12 @@ func (u User) MaskLogin() map[string]interface{} {
 }
 
 func (cfg *apiConfig) addNewUser(email string) (User, error) {
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
-    newUser := User{}
-	newUser.Email := email 
-    emailDuplicateFound := false
-    for _, val := range dbStructure.Users {
-        if val.Email == email {
-            emailDuplicateFound = true
-        }
-    }
+	user, err := cfg.db.CreateUser(context.Background(), email)
+	if err != nil {
+		return User{}, err
+	}
 
-    if !emailDuplicateFound {
-
-    if len(dbStructure.Users) == 0 {
-        dbStructure.Users = make(map[int]User)
-    }
-    err = db.writeDB(dbStructure)
-    return newUser, err
-}
-    err = errors.New("Email already in use. User not created") 
-
-    return User{}, err
+	return user, nil
     
 }
 
