@@ -27,6 +27,10 @@ import (
 )
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Error loading .env file")
+	}
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -41,8 +45,7 @@ func main() {
             log.Print(err)
         }
     }
-    apiCfg := &apiConfig{}
-	apiCfg.db = dbQueries
+	apiCfg := &apiConfig{db: dbQueries}
 
     ServeMux := http.NewServeMux()
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
@@ -50,7 +53,7 @@ func main() {
 	ServeMux.HandleFunc("GET /admin/metrics", apiCfg.checkFileserverHits)
 	ServeMux.HandleFunc("POST /admin/reset", apiCfg.resetHits)
 	ServeMux.HandleFunc("POST /api/validate_chirp", validateChirp)
-	ServeMux.HandleFunc("POST /api/users", validateChirp)
+	ServeMux.HandleFunc("POST /api/users", apiCfg.addUserPost)
 
     server := &http.Server{
         Addr: ":8080",
@@ -171,7 +174,7 @@ func postChirps(w http.ResponseWriter, r *http.Request) {
 
     db, err := NewDB("database.json")
     if err != nil {
-        log.Print(err) 
+        log.Print(err)
     }
     idInt, err := strconv.Atoi(authorId)
     if err != nil {
@@ -489,8 +492,10 @@ func (cfg *apiConfig) addNewUser(email string) (User, error) {
 		return User{}, err
 	}
 
-	return user, nil
-    
+	return User{Id: user.ID,
+				CreatedAt: user.CreatedAt,
+				UpdatedAt: user.UpdatedAt,
+				Email: user.Email,}, nil
 }
 
 func (db *DB) updateUser(email, password string, id int) (User, error) {
@@ -504,32 +509,26 @@ func (db *DB) updateUser(email, password string, id int) (User, error) {
 
 type parameters struct {
     Email string `json:"email"`
-    Password string `json:"password"`
     Expires int     `json:"expires_in_seconds,omitempty"`
 }
 
-func addUserPost(w http.ResponseWriter, r *http.Request) {
-    usr, err := NewDB("database.json")
-    if err != nil {
-        log.Print(err)
-    }
+func (cfg *apiConfig) addUserPost(w http.ResponseWriter, r *http.Request) {
     decoder := json.NewDecoder(r.Body)
     params := parameters{}
-    err = decoder.Decode(&params)
+	err := decoder.Decode(&params)
     if err != nil {
             log.Printf("Error decoding paramters %s", err)
             msg := "Something went wrong"
             respondWithError(w, 500, msg)
             return
     }
-    newUser, err := usr.addNewUser(params.Email, params.Password)
-    if err != nil {
-        log.Print(err)
-        respondWithError(w, 403, "User with same email already exists")
-    } else {
-        newUserPasswordless := newUser.PasswordOmited()
-        respondWithJSON(w, 201, newUserPasswordless)
-    }
+	newUser, err := cfg.addNewUser(params.Email)
+	   if err != nil {
+	       log.Print(err)
+	       respondWithError(w, 403, "User with same email already exists")
+	   } else {
+	       respondWithJSON(w, 201, newUser)
+	   }
     
 }
 
@@ -547,7 +546,7 @@ func userLoginPost(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 500, msg)
             return
     }
-    logingUser, err :=  usr.userLogin(params.Email, params.Password) 
+    logingUser, err :=  usr.userLogin(params.Email, "hello") 
     if err != nil {
         log.Print(err)
         respondWithError(w, 401, "Wrong password")
@@ -761,7 +760,7 @@ func updateUserPut(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         log.Print(err)
     }
-    updatedUser, err := updUsr.updateUser(params.Email, params.Password, idInt) 
+    updatedUser, err := updUsr.updateUser(params.Email, "hello", idInt) 
     updateUserPasswordless := updatedUser.PasswordOmited()
 
     respondWithJSON(w, 200, updateUserPasswordless)
