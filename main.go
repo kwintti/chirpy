@@ -51,7 +51,7 @@ func main() {
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
 	ServeMux.Handle("GET /app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	ServeMux.HandleFunc("GET /admin/metrics", apiCfg.checkFileserverHits)
-	ServeMux.HandleFunc("POST /admin/reset", apiCfg.resetHits)
+	ServeMux.HandleFunc("POST /admin/reset", apiCfg.removeAllUsers)
 	ServeMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	ServeMux.HandleFunc("POST /api/users", apiCfg.addUserPost)
 
@@ -486,8 +486,8 @@ func (u User) MaskLogin() map[string]interface{} {
     }
 }
 
-func (cfg *apiConfig) addNewUser(email string) (User, error) {
-	user, err := cfg.db.CreateUser(context.Background(), email)
+func (cfg *apiConfig) addNewUser(c context.Context,email string) (User, error) {
+	user, err := cfg.db.CreateUser(c, email)
 	if err != nil {
 		return User{}, err
 	}
@@ -496,6 +496,14 @@ func (cfg *apiConfig) addNewUser(email string) (User, error) {
 				CreatedAt: user.CreatedAt,
 				UpdatedAt: user.UpdatedAt,
 				Email: user.Email,}, nil
+}
+func (cfg *apiConfig) removeAllUsers(w http.ResponseWriter, r *http.Request) {
+	err := cfg.db.DropUsers(r.Context())
+	if err == nil {
+		log.Println(err)
+		return
+	}
+	respondWithJSON(w, 200, parameters{})
 }
 
 func (db *DB) updateUser(email, password string, id int) (User, error) {
@@ -522,7 +530,7 @@ func (cfg *apiConfig) addUserPost(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 500, msg)
             return
     }
-	newUser, err := cfg.addNewUser(params.Email)
+	newUser, err := cfg.addNewUser(r.Context(), params.Email)
 	   if err != nil {
 	       log.Print(err)
 	       respondWithError(w, 403, "User with same email already exists")
