@@ -32,6 +32,7 @@ func main() {
 		log.Println("Error loading .env file")
 	}
 	dbURL := os.Getenv("DB_URL")
+	Platform := os.Getenv("PLATFORM")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Print(err)
@@ -45,7 +46,7 @@ func main() {
             log.Print(err)
         }
     }
-	apiCfg := &apiConfig{db: dbQueries}
+	apiCfg := &apiConfig{db: dbQueries, Platform: Platform}
 
     ServeMux := http.NewServeMux()
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
@@ -436,7 +437,7 @@ func respondWithError(w http.ResponseWriter, code int, msg string) {
         w.Write(dat)
 }
 
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+func respondWithJSON(w http.ResponseWriter, code int, payload any) {
         w.Header().Set("Content-Type", "application/json")
         w.WriteHeader(code)
         dat, err := json.Marshal(payload)
@@ -498,12 +499,16 @@ func (cfg *apiConfig) addNewUser(c context.Context,email string) (User, error) {
 				Email: user.Email,}, nil
 }
 func (cfg *apiConfig) removeAllUsers(w http.ResponseWriter, r *http.Request) {
+	if cfg.Platform != "dev" {
+		respondWithError(w, 403, "Access forbidden, only for dev")
+		return
+	}
 	err := cfg.db.DropUsers(r.Context())
-	if err == nil {
+	if err != nil {
 		log.Println(err)
 		return
 	}
-	respondWithJSON(w, 200, parameters{})
+	respondWithJSON(w, 200, nil)
 }
 
 func (db *DB) updateUser(email, password string, id int) (User, error) {
@@ -831,4 +836,5 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 type apiConfig struct {
 	fileserverHits atomic.Int32 
 	db *database.Queries
+	Platform string
 }
