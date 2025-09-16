@@ -55,6 +55,7 @@ func main() {
 	ServeMux.HandleFunc("POST /admin/reset", apiCfg.removeAllUsers)
 	ServeMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	ServeMux.HandleFunc("POST /api/users", apiCfg.addUserPost)
+	ServeMux.HandleFunc("POST /api/chirps", apiCfg.addChirp)
 
     server := &http.Server{
         Addr: ":8080",
@@ -110,6 +111,8 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 
 type Chirp struct {
     Id          int     `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
     Body        string  `json:"body"`
     AuthorId    int     `json:"author_id"`
 }
@@ -124,20 +127,20 @@ func postChirps(w http.ResponseWriter, r *http.Request) {
     type returnValid struct {
         Valid bool   `json:"valid"`
     }
-    godotenv.Load()
-    jwtSecret := os.Getenv("JWT_SECRET") 
-    myClaims := myClaims{}
-    token_with_bear := r.Header.Get("Authorization")
-    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
-    _, err := jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (any, error) {
-        return []byte(jwtSecret), nil
-    })
-    if err != nil {
-        respondWithError(w, 401, "invalid token")
-        log.Print(err)
-        return
-    }
-    authorId := myClaims.Subject
+    // godotenv.Load()
+    // jwtSecret := os.Getenv("JWT_SECRET") 
+    // myClaims := myClaims{}
+    // token_with_bear := r.Header.Get("Authorization")
+    // tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+    // _, err := jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (any, error) {
+    //     return []byte(jwtSecret), nil
+    // })
+    // if err != nil {
+    //     respondWithError(w, 401, "invalid token")
+    //     log.Print(err)
+    //     return
+    // }
+    // authorId := myClaims.Subject
     decoder := json.NewDecoder(r.Body)
     params := parameters{}
     err = decoder.Decode(&params)
