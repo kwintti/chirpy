@@ -55,7 +55,7 @@ func main() {
 	ServeMux.HandleFunc("POST /admin/reset", apiCfg.removeAllUsers)
 	ServeMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	ServeMux.HandleFunc("POST /api/users", apiCfg.addUserPost)
-	ServeMux.HandleFunc("POST /api/chirps", apiCfg.addChirp)
+	ServeMux.HandleFunc("POST /api/chirps", apiCfg.postChirps)
 
     server := &http.Server{
         Addr: ":8080",
@@ -110,20 +110,21 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 
 
 type Chirp struct {
-    Id          int     `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-    Body        string  `json:"body"`
-    AuthorId    int     `json:"author_id"`
+    Id          uuid.UUID     `json:"id"`
+	CreatedAt time.Time 	  `json:"created_at"`
+	UpdatedAt time.Time 	  `json:"updated_at"`
+    Body        string  	  `json:"body"`
+    AuthorId    uuid.UUID     `json:"author_id"`
 }
 
-func postChirps(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) postChirps(w http.ResponseWriter, r *http.Request) {
     type parameters struct {
         Body string `json:"body"`
+		AuthorId uuid.UUID `json:"author_id"`
     }
-    type returnError struct {
-        Error string `json:"error"`
-    }
+    // type returnError struct {
+    //     Error string `json:"error"`
+    // }
     type returnValid struct {
         Valid bool   `json:"valid"`
     }
@@ -143,7 +144,7 @@ func postChirps(w http.ResponseWriter, r *http.Request) {
     // authorId := myClaims.Subject
     decoder := json.NewDecoder(r.Body)
     params := parameters{}
-    err = decoder.Decode(&params)
+	err := decoder.Decode(&params)
     if err != nil {
             log.Printf("Error decoding paramters %s", err)
             msg := "Something went wrong"
@@ -156,40 +157,33 @@ func postChirps(w http.ResponseWriter, r *http.Request) {
         respondWithError(w, 400, msg)
         return
     }
-    splitted_msg := strings.Split(params.Body, " ")
-    offensive_words := [3]string{
-                        "kerfuffle", 
-                        "sharbert", 
-                        "fornax",
-                    }
-    cleaned_msg := make([]string, 0)
-    for _, val := range splitted_msg {
-        word_to_add := val
-        for _, word := range offensive_words {
-            if strings.ToLower(val) == word {
-                word_to_add = "****"
-                break
-            }
+	//    splitted_msg := strings.Split(params.Body, " ")
+	//    offensive_words := [3]string{
+	//                        "kerfuffle", 
+	//                        "sharbert", 
+	//                        "fornax",
+	//                    }
+	//    cleaned_msg := make([]string, 0)
+	// for _, val := range splitted_msg {
+	// 	word_to_add := val
+	// 	for _, word := range offensive_words {
+	// 		if strings.ToLower(val) == word {
+	// 			word_to_add = "****"
+	// 			break
+	// 		}
+	//
+	// 	}
+	// 	cleaned_msg = append(cleaned_msg, word_to_add)
+	// }
+	//    cleaned_msg_joined := strings.Join(cleaned_msg, " ")
 
-    }
-    cleaned_msg = append(cleaned_msg, word_to_add)
-    }
-    cleaned_msg_joined := strings.Join(cleaned_msg, " ")
+//add chirps	
 
-    db, err := NewDB("database.json")
+	newChirp, err := cfg.db.NewChirp(r.Context(), database.NewChirpParams{Body: params.Body, AuthorID: params.AuthorId,})
     if err != nil {
         log.Print(err)
     }
-    idInt, err := strconv.Atoi(authorId)
-    if err != nil {
-        log.Print(err)
-    }
-    
-    newChirp, err := db.CreateChirp(cleaned_msg_joined, idInt)
-    if err != nil {
-        log.Print(err)
-    }
-    respondWithJSON(w, 201, newChirp)
+    respondWithJSON(w, 201, Chirp{Id: newChirp.ID, CreatedAt: newChirp.CreatedAt, UpdatedAt: newChirp.UpdatedAt, Body: newChirp.Body, AuthorId: newChirp.AuthorID})
     return
 }
 
@@ -221,65 +215,65 @@ func NewDB(path string) (*DB, error) {
     return &newDB, nil
 }
 
-func (db *DB) GetChirps(authorID, sortIt string) ([]Chirp, error) {
-    db.mux.RLock()
-    defer db.mux.RUnlock()
-    handlingDB := DBStructure{} 
-    data, err := os.ReadFile("database.json")
-    if err != nil {
-        return nil, err
-    }
-    if err := json.Unmarshal(data, &handlingDB); err != nil {
-        return nil, err
-    }
-    chirpsOut := make([]Chirp, 0)
-    if len(authorID) != 0 {
-        authorIDInt, err := strconv.Atoi(authorID)
-        for _, val := range handlingDB.Chirps {
-            if val.AuthorId == authorIDInt {
-                chirpsOut = append(chirpsOut, val)
-            }
-        if err != nil {
-            return nil, err
-        }
-      }
-    } else {
-    for _, val := range handlingDB.Chirps {
-        chirpsOut = append(chirpsOut, val)
-    }
-}
-    if sortIt == "asc" {
-        sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id < chirpsOut[j].Id})
-    } else {
-        sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id > chirpsOut[j].Id})
-    }
+// func (db *DB) GetChirps(authorID, sortIt string) ([]Chirp, error) {
+//     db.mux.RLock()
+//     defer db.mux.RUnlock()
+//     handlingDB := DBStructure{} 
+//     data, err := os.ReadFile("database.json")
+//     if err != nil {
+//         return nil, err
+//     }
+//     if err := json.Unmarshal(data, &handlingDB); err != nil {
+//         return nil, err
+//     }
+//     chirpsOut := make([]Chirp, 0)
+//     if len(authorID) != 0 {
+//         authorIDInt, err := strconv.Atoi(authorID)
+//         for _, val := range handlingDB.Chirps {
+//             if val.AuthorId == authorIDInt {
+//                 chirpsOut = append(chirpsOut, val)
+//             }
+//         if err != nil {
+//             return nil, err
+//         }
+//       }
+//     } else {
+//     for _, val := range handlingDB.Chirps {
+//         chirpsOut = append(chirpsOut, val)
+//     }
+// }
+//     if sortIt == "asc" {
+//         sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id < chirpsOut[j].Id})
+//     } else {
+//         sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id > chirpsOut[j].Id})
+//     }
+//
+//
+//     return chirpsOut, nil
+// }
 
 
-    return chirpsOut, nil
-}
-
-
-func (db *DB) CreateChirp(body string, authorId int) (Chirp, error) {
-    newChirp := Chirp{}
-    db.mux.RLock()
-    defer db.mux.RUnlock()
-    dbStructure, err := db.loadDB()
-    if err != nil {
-        log.Print(err)
-    }
-    idCountChirps++
-    newChirp.Id = idCountChirps
-    newChirp.Body = body 
-    newChirp.AuthorId = authorId
-    if len(dbStructure.Chirps) == 0 {
-        dbStructure.Chirps = make(map[int]Chirp)
-    }
-    dbStructure.Chirps[int(newChirp.Id)] = newChirp
-    err = db.writeDB(dbStructure)
-
-    return newChirp, err
-
-}
+// func (db *DB) CreateChirp(body string, authorId int) (Chirp, error) {
+//     newChirp := Chirp{}
+//     db.mux.RLock()
+//     defer db.mux.RUnlock()
+//     dbStructure, err := db.loadDB()
+//     if err != nil {
+//         log.Print(err)
+//     }
+//     idCountChirps++
+//     newChirp.Id = idCountChirps
+//     newChirp.Body = body 
+//     newChirp.AuthorId = authorId
+//     if len(dbStructure.Chirps) == 0 {
+//         dbStructure.Chirps = make(map[int]Chirp)
+//     }
+//     dbStructure.Chirps[int(newChirp.Id)] = newChirp
+//     err = db.writeDB(dbStructure)
+//
+//     return newChirp, err
+//
+// }
 var idCount int  
 var idCountChirps int
 var idCountTokens int
@@ -391,31 +385,31 @@ func (db *DB) writeDB(dbStructure DBStructure) error {
 }
 
 
-func getChirpsGet(w http.ResponseWriter, r *http.Request) {
-    db, err := NewDB("database.json")
-    if err != nil {
-        log.Print(err) 
-    }
-    var chirps []Chirp 
-    authorId := r.URL.Query().Get("author_id")
-    sort := r.URL.Query().Get("sort")
-    if len(sort) == 0 {
-        sort = "asc"
-    }
-    if len(authorId) != 0 {
-        chirps, err = db.GetChirps(authorId, sort) 
-        if err != nil {
-            log.Print(err)
-        }
-    } else {    
-        chirps, err = db.GetChirps("", sort) 
-        if err != nil {
-            log.Print(err)
-        }
-    }
-    respondWithJSON(w, 200, chirps)
-
-}
+// func getChirpsGet(w http.ResponseWriter, r *http.Request) {
+//     db, err := NewDB("database.json")
+//     if err != nil {
+//         log.Print(err) 
+//     }
+//     var chirps []Chirp 
+//     authorId := r.URL.Query().Get("author_id")
+//     sort := r.URL.Query().Get("sort")
+//     if len(sort) == 0 {
+//         sort = "asc"
+//     }
+//     if len(authorId) != 0 {
+//         chirps, err = db.GetChirps(authorId, sort) 
+//         if err != nil {
+//             log.Print(err)
+//         }
+//     } else {    
+//         chirps, err = db.GetChirps("", sort) 
+//         if err != nil {
+//             log.Print(err)
+//         }
+//     }
+//     respondWithJSON(w, 200, chirps)
+//
+// }
 
 func getOneChirp(w http.ResponseWriter, r *http.Request) {
 
