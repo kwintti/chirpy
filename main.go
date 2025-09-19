@@ -53,9 +53,10 @@ func main() {
 	ServeMux.Handle("GET /app/", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
 	ServeMux.HandleFunc("GET /admin/metrics", apiCfg.checkFileserverHits)
 	ServeMux.HandleFunc("POST /admin/reset", apiCfg.removeAllUsers)
-	ServeMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	ServeMux.HandleFunc("POST /api/users", apiCfg.addUserPost)
 	ServeMux.HandleFunc("POST /api/chirps", apiCfg.postChirps)
+	ServeMux.HandleFunc("GET /api/chirps", apiCfg.getAllChirps)
+	ServeMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getSingleChirp)
 
     server := &http.Server{
         Addr: ":8080",
@@ -65,66 +66,63 @@ func main() {
     
 }
 
-func validateChirp(w http.ResponseWriter, r *http.Request) {
-	decoder := json.NewDecoder(r.Body)
-	params := Chirp{}
-	err := decoder.Decode(&params)
-	if err != nil {
-		log.Printf("Error decoding parameters: %s", err)
-		w.WriteHeader(500)
-		return
-	}
-	type returnVals struct {
-		Error string `json:"error,omitempty"`
-		Valid bool `json:"valid,omitempty"`
-	}
-	if len(params.Body) > 140 {
-		respValid := returnVals {
-			Error: "Chirp is too long",
-		}
-		dat, err := json.Marshal(respValid)
-		if err != nil {
-			log.Printf("Error Marshling JSON: % s", err)
-			w.WriteHeader(500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(400)
-		w.Write(dat)
-		return
-
-	}
-	respValid := returnVals {
-		Valid: true,
-	}
-	dat, err := json.Marshal(respValid)
-	if err != nil {
-		log.Printf("Error Marshling JSON: % s", err)
-		w.WriteHeader(500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	w.Write(dat)
-}
-
-
 type Chirp struct {
     Id          uuid.UUID     `json:"id"`
 	CreatedAt time.Time 	  `json:"created_at"`
 	UpdatedAt time.Time 	  `json:"updated_at"`
     Body        string  	  `json:"body"`
-    AuthorId    uuid.UUID     `json:"author_id"`
+    AuthorId    uuid.UUID     `json:"user_id"`
+}
+
+func (cfg *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
+	all_chirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		log.Printf("Something wrong with getting chirps from db %s", err)
+		msg := fmt.Sprintf("Something wrong with getting chirps form db %s", err)
+		respondWithError(w, 500, msg)
+		return
+	}
+	var chirpsResp []Chirp
+
+	for _, c := range all_chirps {
+		chirpsResp = append(chirpsResp, Chirp{
+			Id: c.ID,
+			CreatedAt: c.CreatedAt,
+			UpdatedAt: c.UpdatedAt,
+			Body: c.Body,
+			AuthorId: c.AuthorID,
+			})
+		}
+	respondWithJSON(w, 200, chirpsResp)
+}
+
+func (cfg *apiConfig) getSingleChirp(w http.ResponseWriter, r *http.Request) {
+	chirpID, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		msg := fmt.Sprintf("Error parsing chirp's uuid %s", err)
+		respondWithError(w, 500, msg)
+		return
+	}
+	chirpReturned, err := cfg.db.GetSingleChirp(r.Context(), chirpID)
+	if err != nil {
+		msg := fmt.Sprintf("Error getting chirp %s", err)
+		respondWithError(w, 404, msg)
+		return
+	}
+	respondWithJSON(w, 200, Chirp{
+		Id: chirpReturned.ID,
+		CreatedAt: chirpReturned.CreatedAt,
+		UpdatedAt: chirpReturned.UpdatedAt,
+		Body: chirpReturned.Body,
+		AuthorId: chirpReturned.AuthorID,
+	})		
 }
 
 func (cfg *apiConfig) postChirps(w http.ResponseWriter, r *http.Request) {
     type parameters struct {
         Body string `json:"body"`
-		AuthorId uuid.UUID `json:"author_id"`
+		AuthorId uuid.UUID `json:"user_id"`
     }
-    // type returnError struct {
-    //     Error string `json:"error"`
-    // }
     type returnValid struct {
         Valid bool   `json:"valid"`
     }
@@ -177,7 +175,6 @@ func (cfg *apiConfig) postChirps(w http.ResponseWriter, r *http.Request) {
 	// }
 	//    cleaned_msg_joined := strings.Join(cleaned_msg, " ")
 
-//add chirps	
 
 	newChirp, err := cfg.db.NewChirp(r.Context(), database.NewChirpParams{Body: params.Body, AuthorID: params.AuthorId,})
     if err != nil {
