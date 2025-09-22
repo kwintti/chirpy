@@ -20,6 +20,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/kwintti/chirpy/internal/auth"
 	"github.com/kwintti/chirpy/internal/database"
 	"golang.org/x/crypto/bcrypt"
 
@@ -57,6 +58,7 @@ func main() {
 	ServeMux.HandleFunc("POST /api/chirps", apiCfg.postChirps)
 	ServeMux.HandleFunc("GET /api/chirps", apiCfg.getAllChirps)
 	ServeMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getSingleChirp)
+	ServeMux.HandleFunc("POST /api/login", apiCfg.getUser)
 
     server := &http.Server{
         Addr: ":8080",
@@ -182,6 +184,41 @@ func (cfg *apiConfig) postChirps(w http.ResponseWriter, r *http.Request) {
     }
     respondWithJSON(w, 201, Chirp{Id: newChirp.ID, CreatedAt: newChirp.CreatedAt, UpdatedAt: newChirp.UpdatedAt, Body: newChirp.Body, AuthorId: newChirp.AuthorID})
     return
+}
+
+func (cfg *apiConfig) getUser(w http.ResponseWriter, r *http.Request) {
+	params := parameters{}
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&params)
+    if err != nil {
+            log.Printf("Error decoding paramters %s", err)
+            msg := "Something went wrong"
+            respondWithError(w, 500, msg)
+            return
+    }
+
+	user, err := cfg.db.GetUser(r.Context(), params.Email)
+    if err != nil {
+            log.Printf("Couldn't get user %s", err)
+            msg := "Incorrect email or password"
+            respondWithError(w, 401, msg)
+            return
+    }
+
+	err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
+    if err != nil {
+            log.Printf("Couldn't get user %s", err)
+            msg := "Incorrect email or password"
+            respondWithError(w, 401, msg)
+            return
+    }
+
+	respondWithJSON(w, 200, User{
+								Id: user.ID,
+								CreatedAt: user.CreatedAt,
+								UpdatedAt: user.UpdatedAt,
+								Email: user.Email,
+							})
 }
 
 type DB struct {
@@ -481,8 +518,12 @@ func (u User) MaskLogin() map[string]interface{} {
     }
 }
 
-func (cfg *apiConfig) addNewUser(c context.Context,email string) (User, error) {
-	user, err := cfg.db.CreateUser(c, email)
+func (cfg *apiConfig) addNewUser(c context.Context, email, password string) (User, error) {
+	hashedPassword, err := auth.HashPassword(password)
+	if err != nil {
+		return User{}, err
+	}
+	user, err := cfg.db.CreateUser(c, database.CreateUserParams{Email: email, HashedPassword: hashedPassword})
 	if err != nil {
 		return User{}, err
 	}
@@ -505,17 +546,9 @@ func (cfg *apiConfig) removeAllUsers(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, 200, nil)
 }
 
-func (db *DB) updateUser(email, password string, id int) (User, error) {
-    db.mux.RLock()
-    defer db.mux.RUnlock()
-    loadedUser := User{
-                    Email: email,
-                    }
-    return loadedUser, nil 
-}
-
 type parameters struct {
     Email string `json:"email"`
+	Password string `json:"password"`
     Expires int     `json:"expires_in_seconds,omitempty"`
 }
 
@@ -529,7 +562,7 @@ func (cfg *apiConfig) addUserPost(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 500, msg)
             return
     }
-	newUser, err := cfg.addNewUser(r.Context(), params.Email)
+	newUser, err := cfg.addNewUser(r.Context(), params.Email, params.Password)
 	   if err != nil {
 	       log.Print(err)
 	       respondWithError(w, 403, "User with same email already exists")
@@ -732,47 +765,47 @@ func createRefreshToken(user_id string) (string, error) {
     return token_signed, nil
 }
 
-func updateUserPut(w http.ResponseWriter, r *http.Request) {
-    updUsr, err := NewDB("database.json")
-    if err != nil {
-        log.Print(err)
-    }
-
-    godotenv.Load()
-    jwtSecret := os.Getenv("JWT_SECRET") 
-    myClaims := myClaims{}
-    token_with_bear := r.Header.Get("Authorization")
-    tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
-    _, err = jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (interface{}, error) {
-        return []byte(jwtSecret), nil
-    })
-    if err != nil {
-        respondWithError(w, 401, "invalid token")
-        log.Print(err)
-        return
-    }
-    if myClaims.Issuer == "chirpy-refresh" {
-        log.Print("Refresh token is used, Access token is needed.")
-        respondWithError(w, 401, "Refresh token is used. Access token is required.")
-        return
-    }
-    id := myClaims.Subject 
-    decoder := json.NewDecoder(r.Body)
-    params := parameters{}
-    err = decoder.Decode(&params)
-    if err != nil {
-        log.Print(err)
-    }
-    idInt, err := strconv.Atoi(id)
-    if err != nil {
-        log.Print(err)
-    }
-    updatedUser, err := updUsr.updateUser(params.Email, "hello", idInt) 
-    updateUserPasswordless := updatedUser.PasswordOmited()
-
-    respondWithJSON(w, 200, updateUserPasswordless)
-    
-}
+// func updateUserPut(w http.ResponseWriter, r *http.Request) {
+//     updUsr, err := NewDB("database.json")
+//     if err != nil {
+//         log.Print(err)
+//     }
+//
+//     godotenv.Load()
+//     jwtSecret := os.Getenv("JWT_SECRET") 
+//     myClaims := myClaims{}
+//     token_with_bear := r.Header.Get("Authorization")
+//     tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
+//     _, err = jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (interface{}, error) {
+//         return []byte(jwtSecret), nil
+//     })
+//     if err != nil {
+//         respondWithError(w, 401, "invalid token")
+//         log.Print(err)
+//         return
+//     }
+//     if myClaims.Issuer == "chirpy-refresh" {
+//         log.Print("Refresh token is used, Access token is needed.")
+//         respondWithError(w, 401, "Refresh token is used. Access token is required.")
+//         return
+//     }
+//     id := myClaims.Subject 
+//     decoder := json.NewDecoder(r.Body)
+//     params := parameters{}
+//     err = decoder.Decode(&params)
+//     if err != nil {
+//         log.Print(err)
+//     }
+//     idInt, err := strconv.Atoi(id)
+//     if err != nil {
+//         log.Print(err)
+//     }
+//     updatedUser, err := updUsr.updateUser(params.Email, "hello", idInt) 
+//     updateUserPasswordless := updatedUser.PasswordOmited()
+//
+//     respondWithJSON(w, 200, updateUserPasswordless)
+//
+// }
 
 
 
