@@ -204,7 +204,6 @@ func (cfg *apiConfig) getUser(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 401, msg)
             return
     }
-
 	err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
     if err != nil {
             log.Printf("Couldn't get user %s", err)
@@ -249,65 +248,6 @@ func NewDB(path string) (*DB, error) {
     return &newDB, nil
 }
 
-// func (db *DB) GetChirps(authorID, sortIt string) ([]Chirp, error) {
-//     db.mux.RLock()
-//     defer db.mux.RUnlock()
-//     handlingDB := DBStructure{} 
-//     data, err := os.ReadFile("database.json")
-//     if err != nil {
-//         return nil, err
-//     }
-//     if err := json.Unmarshal(data, &handlingDB); err != nil {
-//         return nil, err
-//     }
-//     chirpsOut := make([]Chirp, 0)
-//     if len(authorID) != 0 {
-//         authorIDInt, err := strconv.Atoi(authorID)
-//         for _, val := range handlingDB.Chirps {
-//             if val.AuthorId == authorIDInt {
-//                 chirpsOut = append(chirpsOut, val)
-//             }
-//         if err != nil {
-//             return nil, err
-//         }
-//       }
-//     } else {
-//     for _, val := range handlingDB.Chirps {
-//         chirpsOut = append(chirpsOut, val)
-//     }
-// }
-//     if sortIt == "asc" {
-//         sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id < chirpsOut[j].Id})
-//     } else {
-//         sort.Slice(chirpsOut, func(i, j int) bool {return chirpsOut[i].Id > chirpsOut[j].Id})
-//     }
-//
-//
-//     return chirpsOut, nil
-// }
-
-
-// func (db *DB) CreateChirp(body string, authorId int) (Chirp, error) {
-//     newChirp := Chirp{}
-//     db.mux.RLock()
-//     defer db.mux.RUnlock()
-//     dbStructure, err := db.loadDB()
-//     if err != nil {
-//         log.Print(err)
-//     }
-//     idCountChirps++
-//     newChirp.Id = idCountChirps
-//     newChirp.Body = body 
-//     newChirp.AuthorId = authorId
-//     if len(dbStructure.Chirps) == 0 {
-//         dbStructure.Chirps = make(map[int]Chirp)
-//     }
-//     dbStructure.Chirps[int(newChirp.Id)] = newChirp
-//     err = db.writeDB(dbStructure)
-//
-//     return newChirp, err
-//
-// }
 var idCount int  
 var idCountChirps int
 var idCountTokens int
@@ -416,38 +356,6 @@ func (db *DB) writeDB(dbStructure DBStructure) error {
 
 
     return err
-}
-
-
-// func getChirpsGet(w http.ResponseWriter, r *http.Request) {
-//     db, err := NewDB("database.json")
-//     if err != nil {
-//         log.Print(err) 
-//     }
-//     var chirps []Chirp 
-//     authorId := r.URL.Query().Get("author_id")
-//     sort := r.URL.Query().Get("sort")
-//     if len(sort) == 0 {
-//         sort = "asc"
-//     }
-//     if len(authorId) != 0 {
-//         chirps, err = db.GetChirps(authorId, sort) 
-//         if err != nil {
-//             log.Print(err)
-//         }
-//     } else {    
-//         chirps, err = db.GetChirps("", sort) 
-//         if err != nil {
-//             log.Print(err)
-//         }
-//     }
-//     respondWithJSON(w, 200, chirps)
-//
-// }
-
-func getOneChirp(w http.ResponseWriter, r *http.Request) {
-
-    respondWithJSON(w, 200, Chirp{})
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {

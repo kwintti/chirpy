@@ -2,7 +2,10 @@ package auth
 
 import (
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,3 +24,28 @@ func TestHashing(t *testing.T) {
 	err = CheckPasswordHash("this_is_wrong", hashed)
 	require.Error(t, err)
 }
+
+func TestJWT(t *testing.T) {
+	//Test token is valid
+	idUUID, err := uuid.Parse("ea6f3461-d69a-47e4-b631-4ef4d9afd249")
+	require.NoError(t, err)
+	require.NotNil(t, idUUID)
+
+	tokenSigned, err := MakeJWT(idUUID, "this_is_token_secret", 10 * time.Minute)
+	require.NoError(t, err)
+	id, err := ValidateJWT(tokenSigned, "this_is_token_secret")
+	require.NoError(t, err)
+	assert.Equal(t, idUUID, id)
+
+	//Test token is invalid
+	_, err = ValidateJWT(tokenSigned, "this_is_token_secret_NOTVALID")
+	require.Error(t, err)
+
+	//Token is expired
+	tokenSigned, err = MakeJWT(idUUID, "this_is_token_secret", 1 * time.Millisecond)
+	require.NoError(t, err)
+	time.Sleep(10*time.Millisecond)
+	_, err = ValidateJWT(tokenSigned, "this_is_token_secret")
+	require.Error(t, err)
+}
+
