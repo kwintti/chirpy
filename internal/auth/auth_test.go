@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -49,3 +50,27 @@ func TestJWT(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBearer(t *testing.T) {
+	//Test Bearer token if present
+	header := http.Header{}
+	header.Set("Authorization", "Bearer this_is_token_secret")
+	token, err := GetBearerToken(header)
+	require.NoError(t, err)
+	assert.Equal(t, "this_is_token_secret", token)
+}
+
+func TestBearerMissing(t *testing.T) {
+	// Bearer missing
+	header := http.Header{}
+	_, err := GetBearerToken(header)
+	require.Error(t, err)
+}	
+
+func TestBearer_Extra_Spaces(t *testing.T) {
+	// Extra Spaces 
+	header := http.Header{}
+	header.Set("Authorization", "      Bearer      this_is_token_secret    ")
+	token, err := GetBearerToken(header)
+	require.NoError(t, err)
+	assert.Equal(t, "this_is_token_secret", token)
+}	

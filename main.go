@@ -34,6 +34,7 @@ func main() {
 	}
 	dbURL := os.Getenv("DB_URL")
 	Platform := os.Getenv("PLATFORM")
+	JWT := os.Getenv("JWT_SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Print(err)
@@ -47,7 +48,7 @@ func main() {
             log.Print(err)
         }
     }
-	apiCfg := &apiConfig{db: dbQueries, Platform: Platform}
+	apiCfg := &apiConfig{db: dbQueries, Platform: Platform, JWT: JWT}
 
     ServeMux := http.NewServeMux()
 	ServeMux.Handle("/", http.FileServer(http.Dir(".")))
@@ -211,12 +212,23 @@ func (cfg *apiConfig) getUser(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 401, msg)
             return
     }
+	expires_in := 3600 
+	if params.Expires <= 3600 && params.Expires > 0 {
+		expires_in = params.Expires 
+	}
+	token, err := auth.MakeJWT(user.ID, cfg.JWT, time.Second * time.Duration(expires_in))
+	if err != nil {
+		msg := fmt.Sprintf("Couldn't make token for the user %s", err)
+		respondWithError(w, 401, msg)
+		return 
+	}
 
 	respondWithJSON(w, 200, User{
 								Id: user.ID,
 								CreatedAt: user.CreatedAt,
 								UpdatedAt: user.UpdatedAt,
 								Email: user.Email,
+								Token: token,
 							})
 }
 
@@ -393,6 +405,7 @@ type User struct {
 	CreatedAt time.Time	  `json:"created_at"`
 	UpdatedAt time.Time	  `json:"updated_at"`
     Email   string  `json:"email"`
+	Token string `json:"token,omitempty"`
 }
 
 type Token struct {
@@ -772,4 +785,5 @@ type apiConfig struct {
 	fileserverHits atomic.Int32 
 	db *database.Queries
 	Platform string
+	JWT string
 }
