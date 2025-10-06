@@ -124,25 +124,8 @@ func (cfg *apiConfig) getSingleChirp(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) postChirps(w http.ResponseWriter, r *http.Request) {
     type parameters struct {
         Body string `json:"body"`
-		AuthorId uuid.UUID `json:"user_id"`
     }
-    type returnValid struct {
-        Valid bool   `json:"valid"`
-    }
-    // godotenv.Load()
-    // jwtSecret := os.Getenv("JWT_SECRET") 
-    // myClaims := myClaims{}
-    // token_with_bear := r.Header.Get("Authorization")
-    // tokenString := strings.TrimPrefix(token_with_bear, "Bearer ")
-    // _, err := jwt.ParseWithClaims(tokenString, &myClaims, func(token *jwt.Token) (any, error) {
-    //     return []byte(jwtSecret), nil
-    // })
-    // if err != nil {
-    //     respondWithError(w, 401, "invalid token")
-    //     log.Print(err)
-    //     return
-    // }
-    // authorId := myClaims.Subject
+
     decoder := json.NewDecoder(r.Body)
     params := parameters{}
 	err := decoder.Decode(&params)
@@ -152,34 +135,29 @@ func (cfg *apiConfig) postChirps(w http.ResponseWriter, r *http.Request) {
             respondWithError(w, 500, msg)
             return
     }
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+            log.Printf("Error getting token from bearer %s", err)
+            msg := "Something went wrong"
+            respondWithError(w, 500, msg)
+            return
+    }
+	userID, err := auth.ValidateJWT(token, cfg.JWT)
+	if err != nil {
+            log.Printf("Unauthorized %s", err)
+            msg := "Unauthorized"
+            respondWithError(w, 401, msg)
+            return
+	}
+
     if len(params.Body) >= 140 {
         log.Printf("Message you sent is too long %d chars. Only 140 char is allowed.", len(params.Body)) 
         msg := "Chirp is too long"
         respondWithError(w, 400, msg)
         return
     }
-	//    splitted_msg := strings.Split(params.Body, " ")
-	//    offensive_words := [3]string{
-	//                        "kerfuffle", 
-	//                        "sharbert", 
-	//                        "fornax",
-	//                    }
-	//    cleaned_msg := make([]string, 0)
-	// for _, val := range splitted_msg {
-	// 	word_to_add := val
-	// 	for _, word := range offensive_words {
-	// 		if strings.ToLower(val) == word {
-	// 			word_to_add = "****"
-	// 			break
-	// 		}
-	//
-	// 	}
-	// 	cleaned_msg = append(cleaned_msg, word_to_add)
-	// }
-	//    cleaned_msg_joined := strings.Join(cleaned_msg, " ")
 
-
-	newChirp, err := cfg.db.NewChirp(r.Context(), database.NewChirpParams{Body: params.Body, AuthorID: params.AuthorId,})
+	newChirp, err := cfg.db.NewChirp(r.Context(), database.NewChirpParams{Body: params.Body, AuthorID: userID,})
     if err != nil {
         log.Print(err)
     }
